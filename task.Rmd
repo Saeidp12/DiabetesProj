@@ -1,0 +1,305 @@
+---
+title: "Big Data Project"
+output:
+  word_document: default
+  html_document: default
+date: '2022-05-12'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Task 1: Discovery
+
+### 1. Read the data
+
+```{r}
+# required libraries:
+library(tidyverse)
+```
+
+
+```{r}
+df <- read.csv('diabetes.csv', header=T) 
+df %>% head
+```
+### 2. Remove 200 random healthy observations
+```{r}
+idx <- rownames(df) %>% unlist %>% as.vector %>% as.numeric
+# filtering doesn't hold the default indices that's why we created the idx variable
+# (to save the initial indices of healthy patients)
+idx_healthy <- df %>% mutate(idx = idx) %>% filter(Outcome==0) %>% select(idx)
+idx_healthy <- as.vector(t(idx_healthy))
+# now we randomly select 200 indices and remove them from the data
+idx_sample <- sample(idx_healthy, 200, replace=F)
+
+# Now we remove those rows with an index in idx_sample and remove the additional idx column
+df_new <- df[-idx_sample,]
+```
+
+### 3. Remove Age
+```{r}
+df_new <- df_new %>% select(-Age)
+```
+
+### 4. Display the first 10 instances 
+```{r}
+df_new %>% head(10)
+  
+
+```
+
+```{r}
+df_new %>% dim
+```
+After steps above, we have 568 instances, 7 features and 1 target variable (Outcome)
+
+### 5. Check the structure of the data...
+
+```{r}
+# missing values
+df_new %>% is.na %>% colSums()
+```
+As you can see there is no missing values in the data. Now we can check the types of each variable
+
+```{r}
+apply(df_new, 2, function(x){class(x)})
+```
+
+As you can see all of them are numeric. 
+
+### 6. Provide Summary
+
+```{r}
+# summarise the list of columns of dataframe
+#install.packages('vtable') 
+df_new %>% select(-Outcome) %>% vtable::st() # this is just fancy. We can use summary() for simplicity
+# df_new %>% select(-Outcome) %>% summary
+```
+
+
+### 7. Visualize the data in three different ways
+
+```{r}
+# Do women who have had pregnancies have higher BMI?
+df_new %>% mutate(obesity = factor(BMI > 29, levels=c(TRUE, FALSE))) %>%
+  ggplot( aes(x=BloodPressure, fill=obesity)) + 
+  geom_density(alpha=0.4) + 
+  scale_x_continuous(name="Blood Pressure", limits=c(10, 120)) +
+  ggtitle('Density of Blood Pressure based on obesity') +
+  theme_gray()
+```
+
+As you can see there's a slight difference in blood pressure for obese people as its distribution is shifted slightly to the right-hand side. 
+
+```{r}
+# Does obesity differ between people with different pregnancy numbers?
+df_2 <- df_new %>% mutate(obesity = factor(BMI > 29, levels=c(TRUE, FALSE))) %>% select(-BMI)
+df_2 %>% group_by(obesity) %>% summarize(Pregnancies=mean(Pregnancies)) %>%
+  ggplot( aes(x=obesity, y=Pregnancies)) +
+  geom_bar(stat='identity') + 
+  scale_y_continuous(name="Number of Pregnancies", limits=c(0, 25)) +
+  theme_minimal()
+```
+
+As you can see, on average, women with higher number of child labor, tend to have more BMI. 
+
+```{r}
+# do diabetic people have different blood pressure from healthy people?
+df_new %>% mutate(outcome2= factor(Outcome, levels=c(0,1))) %>%
+  ggplot( aes(x=BloodPressure, fill=outcome2)) + 
+  geom_density(alpha=0.4) + 
+  scale_x_continuous(name="Blood Pressure", limits=c(10, 120)) +
+  ggtitle('Density of Blood Pressure based on being diabetic') +
+  theme_gray()
+```
+
+As you can see, diabetic people tend to have higher blood pressure rates. 
+
+## Task 2: Hypothesis testing
+
+
+Null Hypothesis: Diabetic people tend to have smaller blood pressure (2-sample t-test)
+Alternative Hypothesis: Diabetic people tend to have higher blood pressure 
+
+```{r}
+t.test(df_new$BloodPressure, df_new$Outcome, alternative='greater', paired=TRUE)
+```
+
+This test evaluates if the mean blood pressure in diabetic people is greater than healthy people. The p-value is nearly zero which indicates that the null hypothesis is rejected and the mean blood pressure for diabetic people is larger.
+
+A paired t-test is a great choice when we want to compare mean of one variable between groups of observations (comparing the mean of variable between observations grouped by another variable).
+
+## Task 3: Model Building and Evaluation
+
+The type of regression that works with classification is logistic regression. In order to work with it, we need to factorize our target variable (outcome)
+```{r}
+# part.b
+df_new$Outcome <- factor(df_new$Outcome, levels=c(0, 1))
+
+set.seed(1234)
+idx <- sample(nrow(df_new), floor(0.8*nrow(df_new)))
+train_df <- df_new[idx,]
+test_df <- df_new[-idx,]
+```
+
+#### Logistic Regression
+
+```{r}
+# Regression Method
+library(caret)
+
+tc <- trainControl("cv", 10, savePredictions=T)  #"cv" = cross-validation, 10-fold
+
+fit.glm <- train(Outcome ~.,data = train_df, 
+                          method = "glm",
+                          family = binomial,
+                          trControl=tc)
+
+summary(fit.glm)
+```
+
+From the results we can see that Pregnancies, Glucose, SkinThickness, Insulin, BMI, and DiabetesPedigreeFunction, have a meaningful or significant on the output and should remain in the model. So now we can fit our model again with those variables only:
+
+
+
+```{r}
+fit.glm2 <- train(Outcome ~ Pregnancies + Glucose + SkinThickness + Insulin + BMI +
+                    DiabetesPedigreeFunction,
+                          data = train_df, 
+                          method = "glm",
+                          family = binomial,
+                          trControl=tc)
+
+summary(fit.glm2)
+
+pred.glm2_resp <- predict(fit.glm2, test_df[,-ncol(test_df)], type='prob')[,2]
+pred.glm2 <- predict(fit.glm2, test_df[,-ncol(test_df)])
+
+```
+
+
+As you can see this model, has lower aic than the previous one, so it can be interpreted as a better model. 
+
+From the results we can also see that all variable have positive impacts on the response variable, which means that increasing them would increase the chances of being diabetic. 
+
+```{r}
+library(pROC)
+
+# ROC
+#define object to plot
+rocobj <- roc(test_df$Outcome, pred.glm2_resp)
+
+#create ROC plot
+ggroc(rocobj)
+# AUC
+rocobj$auc
+
+# confusion matrix for evaluation metrics
+conf_mat <- confusionMatrix(pred.glm2, test_df$Outcome)
+
+conf_mat # accuracy, sensitivity, specificity, etc
+
+# Sensitivity = TP/(TP + FN) = (Number of true positive assessment)/(Number of all positive assessment)
+
+# Specificity = TN/(TN + FP) = (Number of true negative assessment)/(Number of all negative assessment)
+
+# Accuracy = (TN + TP)/(TN+TP+FN+FP) = (Number of correct assessments)/Number of all assessments)
+```
+
+#### Naive Bayes
+
+```{r}
+# Train the Naive Bayes model with the Caret package
+
+nb.fit <- train(Outcome ~ Pregnancies + Glucose + SkinThickness + Insulin + BMI +
+                    DiabetesPedigreeFunction, 
+                               data = train_df, 
+                               method = "naive_bayes", 
+                               usepoisson = TRUE)
+# If it asks installing the naivebayes package hit 1
+
+summary(nb.fit)
+```
+```{r}
+pred.nb <- predict(nb.fit, test_df[,-ncol(test_df)]) # predictions
+pred.nb_prob <- predict(nb.fit, test_df[,-ncol(test_df)], type='prob')[,2] # prediction probabilities
+
+# ROC
+#define object to plot
+rocobj <- roc(test_df$Outcome, pred.glm2_resp)
+
+#create ROC plot
+ggroc(rocobj)
+# AUC
+rocobj$auc
+
+# confusion matrix for evaluation metrics
+conf_mat <- confusionMatrix(pred.glm2, test_df$Outcome)
+
+conf_mat # accuracy, sensitivity, specificity, etc
+```
+
+#### Decision Tree
+
+```{r}
+
+tree.fit = train(Outcome ~ Pregnancies + Glucose + SkinThickness + Insulin + BMI +
+                    DiabetesPedigreeFunction, 
+                  data=train_df, 
+                  method="rpart", 
+                  trControl = tc)
+
+tree.fit
+```
+
+```{r}
+# tree plot
+library(rattle)
+
+fancyRpartPlot(tree.fit$finalModel,palette="Set2",branch.col="black", caption="")
+
+```
+```{r}
+# predictions
+
+tree.pred = predict(tree.fit, newdata = test_df[,-ncol(test_df)])
+tree.pred_prob = predict(tree.fit, newdata = test_df[,-ncol(test_df)], type='prob')[,2]
+
+# ROC
+#define object to plot
+rocobj <- roc(test_df$Outcome, tree.pred_prob)
+
+#create ROC plot
+ggroc(rocobj)
+# AUC
+rocobj$auc
+
+# confusion matrix for evaluation metrics
+conf_mat <- confusionMatrix(tree.pred, test_df$Outcome)
+
+conf_mat # accuracy, sensitivity, specificity, etc
+```
+
+
+#### Which method performed best?
+
+Based on accuracy the best method was decision tree. It had the highest accuracy rate among the 3 models. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
